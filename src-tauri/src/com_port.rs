@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
@@ -56,13 +56,13 @@ impl Default for PortSettings {
 }
 
 pub struct ComPortManager {
-    ports: Arc<Mutex<HashMap<String, Arc<Mutex<SerialStream>>>>>,
+    ports: Arc<RwLock<HashMap<String, SerialStream>>>,
 }
 
 impl ComPortManager {
     pub fn new() -> Self {
         Self {
-            ports: Arc::new(Mutex::new(HashMap::new())),
+            ports: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -112,10 +112,11 @@ impl ComPortManager {
         port_name: &str,
         settings: PortSettings,
     ) -> ComPortResult<()> {
-        let mut ports = self.ports.lock().await;
-
-        if ports.contains_key(port_name) {
-            return Err(ComPortError::PortAlreadyOpen(port_name.to_string()));
+        {
+            let ports = self.ports.read().await;
+            if ports.contains_key(port_name) {
+                return Err(ComPortError::PortAlreadyOpen(port_name.to_string()));
+            }
         }
 
         let parity = match settings.parity.as_str() {
@@ -164,13 +165,14 @@ impl ComPortManager {
             .with_context(|| format!("Failed to open serial port: {}", port_name))
             .map_err(|e| ComPortError::OpenFailed(e.to_string()))?;
 
-        ports.insert(port_name.to_string(), Arc::new(Mutex::new(port)));
+        let mut ports = self.ports.write().await;
+        ports.insert(port_name.to_string(), port);
         Ok(())
     }
 
     pub async fn close_port(&self, port_name: &str) -> ComPortResult<()> {
-        let mut ports = self.ports.lock().await;
-
+        let mut ports = self.ports.write().await;
+        
         if !ports.contains_key(port_name) {
             return Err(ComPortError::PortNotOpen(port_name.to_string()));
         }
@@ -180,20 +182,15 @@ impl ComPortManager {
     }
 
     pub async fn is_port_open(&self, port_name: &str) -> bool {
-        let ports = self.ports.lock().await;
+        let ports = self.ports.read().await;
         ports.contains_key(port_name)
     }
 
     pub async fn write_data(&self, port_name: &str, data: &[u8]) -> ComPortResult<usize> {
-        let port_arc = {
-            let ports = self.ports.lock().await;
-            ports
-                .get(port_name)
-                .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?
-                .clone()
-        };
-
-        let mut port = port_arc.lock().await;
+        let mut ports = self.ports.write().await;
+        let port = ports
+            .get_mut(port_name)
+            .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?;
 
         let write_timeout = Duration::from_secs(3);
         let written = timeout(write_timeout, port.write(data))
@@ -216,18 +213,13 @@ impl ComPortManager {
     }
 
     pub async fn read_data(&self, port_name: &str, buffer_size: usize) -> ComPortResult<Vec<u8>> {
-        let port_arc = {
-            let ports = self.ports.lock().await;
-            ports
-                .get(port_name)
-                .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?
-                .clone()
-        };
-
-        let mut port = port_arc.lock().await;
+        let mut ports = self.ports.write().await;
+        let port = ports
+            .get_mut(port_name)
+            .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?;
 
         let mut buffer = vec![0u8; buffer_size];
-        let read_timeout = Duration::from_secs(3);
+        let read_timeout = Duration::from_millis(100);
         
         match timeout(read_timeout, port.read(&mut buffer)).await {
             Ok(Ok(bytes_read)) => {
@@ -250,19 +242,23 @@ impl ComPortManager {
         port_name: &str,
         settings: PortSettings,
     ) -> ComPortResult<()> {
-        let mut ports = self.ports.lock().await;
-
-        if !ports.contains_key(port_name) {
-            return Err(ComPortError::PortNotOpen(port_name.to_string()));
+        {
+            let ports = self.ports.read().await;
+            if !ports.contains_key(port_name) {
+                return Err(ComPortError::PortNotOpen(port_name.to_string()));
+            }
         }
 
-        ports.remove(port_name);
+        {
+            let mut ports = self.ports.write().await;
+            ports.remove(port_name);
+        }
 
         self.open_port(port_name, settings).await
     }
 
     pub async fn close_all_ports(&self) {
-        let mut ports = self.ports.lock().await;
+        let mut ports = self.ports.write().await;
         ports.clear();
     }
 }
