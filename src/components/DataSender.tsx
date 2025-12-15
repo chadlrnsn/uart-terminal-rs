@@ -1,10 +1,8 @@
 import { useState, KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Send } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 interface DataSenderProps {
   onSend: (data: Uint8Array) => void;
