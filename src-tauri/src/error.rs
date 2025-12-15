@@ -2,9 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ComPortError {
-    #[error("Port not found: {0}")]
-    PortNotFound(String),
-
     #[error("Port already open: {0}")]
     PortAlreadyOpen(String),
 
@@ -19,9 +16,6 @@ pub enum ComPortError {
 
     #[error("Failed to write to port: {0}")]
     WriteFailed(String),
-
-    #[error("Invalid baud rate: {0}")]
-    InvalidBaudRate(u32),
 
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),

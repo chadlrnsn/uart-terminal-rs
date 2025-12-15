@@ -12,6 +12,8 @@ interface TerminalProps {
   maxLines?: number;
   localTxEcho?: boolean;
   onLocalTxEchoChange?: (enabled: boolean) => void;
+  showRxHex?: boolean;
+  onShowRxHexChange?: (enabled: boolean) => void;
 }
 
 type FilterType = "all" | "tx" | "rx";
@@ -22,6 +24,8 @@ export function Terminal({
   maxLines = 1000,
   localTxEcho = false,
   onLocalTxEchoChange,
+  showRxHex = false,
+  onShowRxHexChange,
 }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -95,6 +99,21 @@ export function Terminal({
                   className="text-sm font-normal cursor-pointer"
                 >
                   Local TX Echo
+                </Label>
+              </div>
+            )}
+            {onShowRxHexChange && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="show-rx-hex"
+                  checked={showRxHex}
+                  onCheckedChange={(checked) => onShowRxHexChange(checked === true)}
+                />
+                <Label
+                  htmlFor="show-rx-hex"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Show RX Hex
                 </Label>
               </div>
             )}

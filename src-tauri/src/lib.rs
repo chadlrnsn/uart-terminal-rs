@@ -1,6 +1,7 @@
 mod com_port;
 mod error;
 
+use anyhow::Context;
 use com_port::{ComPortManager, PortInfo, PortSettings};
 use serde::Serialize;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ async fn list_ports(manager: tauri::State<'_, Manager>) -> Result<Vec<PortInfo>,
     let mgr = manager.lock().await;
     mgr.list_ports()
         .await
+        .context("Failed to list serial ports")
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -32,6 +34,7 @@ async fn open_port(
     let mgr = manager.lock().await;
     mgr.open_port(&port_name, settings)
         .await
+        .with_context(|| format!("Failed to open port: {}", port_name))
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -45,6 +48,7 @@ async fn close_port(
     let mgr = manager.lock().await;
     mgr.close_port(&port_name)
         .await
+        .with_context(|| format!("Failed to close port: {}", port_name))
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -68,6 +72,7 @@ async fn write_data(
     let mgr = manager.lock().await;
     mgr.write_data(&port_name, &data)
         .await
+        .with_context(|| format!("Failed to write data to port: {}", port_name))
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -82,6 +87,7 @@ async fn read_data(
     let mgr = manager.lock().await;
     mgr.read_data(&port_name, buffer_size)
         .await
+        .with_context(|| format!("Failed to read data from port: {}", port_name))
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -96,6 +102,7 @@ async fn update_settings(
     let mgr = manager.lock().await;
     mgr.update_settings(&port_name, settings)
         .await
+        .with_context(|| format!("Failed to update settings for port: {}", port_name))
         .map_err(|e| ErrorResponse {
             error: e.to_string(),
         })
@@ -112,7 +119,7 @@ async fn close_all_ports(manager: tauri::State<'_, Manager>) -> Result<(), Error
 pub fn run() {
     let manager = Arc::new(Mutex::new(ComPortManager::new()));
 
-    tauri::Builder::default()
+    if let Err(e) = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(manager)
         .invoke_handler(tauri::generate_handler![
@@ -126,5 +133,9 @@ pub fn run() {
             close_all_ports
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .context("Failed to initialize Tauri application")
+    {
+        eprintln!("Error: {:#}", e);
+        std::process::exit(1);
+    }
 }

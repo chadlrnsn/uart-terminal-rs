@@ -1,9 +1,12 @@
 use crate::error::{ComPortError, ComPortResult};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +56,7 @@ impl Default for PortSettings {
 }
 
 pub struct ComPortManager {
-    ports: Arc<Mutex<HashMap<String, SerialStream>>>,
+    ports: Arc<Mutex<HashMap<String, Arc<Mutex<SerialStream>>>>>,
 }
 
 impl ComPortManager {
@@ -65,9 +68,10 @@ impl ComPortManager {
 
     pub async fn list_ports(&self) -> ComPortResult<Vec<PortInfo>> {
         let ports = serialport::available_ports()
+            .context("Failed to enumerate available serial ports")
             .map_err(|e| ComPortError::IoError(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to list ports: {}", e),
+                e.to_string(),
             )))?;
 
         let mut port_info_list = Vec::new();
@@ -157,9 +161,10 @@ impl ComPortManager {
             .flow_control(flow_control)
             .timeout(std::time::Duration::from_millis(settings.timeout_ms))
             .open_native_async()
-            .map_err(|e| ComPortError::OpenFailed(format!("{}: {}", port_name, e)))?;
+            .with_context(|| format!("Failed to open serial port: {}", port_name))
+            .map_err(|e| ComPortError::OpenFailed(e.to_string()))?;
 
-        ports.insert(port_name.to_string(), port);
+        ports.insert(port_name.to_string(), Arc::new(Mutex::new(port)));
         Ok(())
     }
 
@@ -180,39 +185,64 @@ impl ComPortManager {
     }
 
     pub async fn write_data(&self, port_name: &str, data: &[u8]) -> ComPortResult<usize> {
-        let mut ports = self.ports.lock().await;
+        let port_arc = {
+            let ports = self.ports.lock().await;
+            ports
+                .get(port_name)
+                .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?
+                .clone()
+        };
 
-        let port = ports
-            .get_mut(port_name)
-            .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?;
+        let mut port = port_arc.lock().await;
 
-        let written = port
-            .write(data)
+        let write_timeout = Duration::from_secs(3);
+        let written = timeout(write_timeout, port.write(data))
             .await
-            .map_err(|e| ComPortError::WriteFailed(format!("{}: {}", port_name, e)))?;
+            .map_err(|_| ComPortError::WriteFailed(
+                format!("Write operation timed out after 3 seconds for port: {}", port_name)
+            ))?
+            .with_context(|| format!("Failed to write data to port: {}", port_name))
+            .map_err(|e| ComPortError::WriteFailed(e.to_string()))?;
 
-        port.flush()
+        timeout(write_timeout, port.flush())
             .await
-            .map_err(|e| ComPortError::WriteFailed(format!("{}: {}", port_name, e)))?;
+            .map_err(|_| ComPortError::WriteFailed(
+                format!("Flush operation timed out after 3 seconds for port: {}", port_name)
+            ))?
+            .with_context(|| format!("Failed to flush port: {}", port_name))
+            .map_err(|e| ComPortError::WriteFailed(e.to_string()))?;
 
         Ok(written)
     }
 
     pub async fn read_data(&self, port_name: &str, buffer_size: usize) -> ComPortResult<Vec<u8>> {
-        let mut ports = self.ports.lock().await;
+        let port_arc = {
+            let ports = self.ports.lock().await;
+            ports
+                .get(port_name)
+                .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?
+                .clone()
+        };
 
-        let port = ports
-            .get_mut(port_name)
-            .ok_or_else(|| ComPortError::PortNotOpen(port_name.to_string()))?;
+        let mut port = port_arc.lock().await;
 
         let mut buffer = vec![0u8; buffer_size];
-        let bytes_read = port
-            .read(&mut buffer)
-            .await
-            .map_err(|e| ComPortError::ReadFailed(format!("{}: {}", port_name, e)))?;
-
-        buffer.truncate(bytes_read);
-        Ok(buffer)
+        let read_timeout = Duration::from_secs(3);
+        
+        match timeout(read_timeout, port.read(&mut buffer)).await {
+            Ok(Ok(bytes_read)) => {
+                buffer.truncate(bytes_read);
+                Ok(buffer)
+            }
+            Ok(Err(e)) => {
+                Err(ComPortError::ReadFailed(
+                    format!("Failed to read data from port {}: {}", port_name, e)
+                ))
+            }
+            Err(_) => {
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub async fn update_settings(

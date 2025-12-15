@@ -32,6 +32,7 @@ function App() {
   const [isReading, setIsReading] = useState(false);
   const [activeTab, setActiveTab] = useState<"metrics" | "settings" | "terminal" | "logs">("settings");
   const [localTxEcho, setLocalTxEcho] = useState(false);
+  const [showRxHex, setShowRxHex] = useState(false);
   const [txSettings, setTxSettings] = useState<TxSettings>({
     enterKey: "lf",
     backspaceKey: "backspace",
@@ -83,14 +84,17 @@ function App() {
         const hexString = Array.from(data)
           .map((b) => b.toString(16).padStart(2, "0"))
           .join(" ");
-        setTerminalData((prev) => prev + `[RX] ${text} (${hexString})\n`);
+        const rxLine = showRxHex 
+          ? `[RX] ${text} (${hexString})\n`
+          : `[RX] ${text}\n`;
+        setTerminalData((prev) => prev + rxLine);
       }
     } catch (err) {
       console.error("Read error:", err);
     } finally {
       setIsReading(false);
     }
-  }, [isOpen, isReading, readData]);
+  }, [isOpen, isReading, readData, showRxHex]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -174,6 +178,8 @@ function App() {
                       maxLines={1000}
                       localTxEcho={localTxEcho}
                       onLocalTxEchoChange={setLocalTxEcho}
+                      showRxHex={showRxHex}
+                      onShowRxHexChange={setShowRxHex}
                     />
                   </div>
                   <DataSender
